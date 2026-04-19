@@ -14,7 +14,7 @@ The system is designed for horizontal scalability and resilience. Unlike "black-
 
 
 
-## 🚀 Technical Highlights
+##  Technical Highlights
 
 -   **Async Inference Pipeline:** Built entirely on `asyncio` for non-blocking I/O.
 -   **Distributed Message Queue:** Uses Redis (`BRPOP`/`LPUSH`) for inter-agent communication.
@@ -22,7 +22,7 @@ The system is designed for horizontal scalability and resilience. Unlike "black-
 -   **Real-time Streaming:** Token-level streaming from background workers to the UI via Redis `APPEND`.
 -   **Resilience:** Implements `tenacity` for exponential backoff retries on LLM inference.
 
-## 🛠 Setup & Installation
+##  Setup & Installation
 
 1. **Clone the repository:**
    ```bash
@@ -48,7 +48,7 @@ The system is designed for horizontal scalability and resilience. Unlike "black-
    REDIS_URL=your_upstash_or_local_redis_url
    ```
 
-## 🖥 How to Run (3-Terminal Method)
+## How to Run (3-Terminal Method)
 
 To observe the agentic flow and internal communication, open three terminal windows:
 
@@ -89,8 +89,8 @@ curl -X POST http://localhost:8000/task \
 Copy the `task_id` returned in Terminal 3 and open your browser to:
 `http://localhost:8000/stream/YOUR_TASK_ID`
 
-## 🎥 Project Explanation Video
+## Project Explanation Video
 [Link to Drive Video Here]
 
-## 📝 Post-Mortem
+## Post-Mortem
 Detailed documentation on scaling issues, design decisions, and trade-offs can be found in `POST_MORTEM.md`.
