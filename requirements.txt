@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+groq
+redis
+pydantic
+sse-starlette
+python-dotenv
+tenacity
