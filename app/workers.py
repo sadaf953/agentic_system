@@ -6,10 +6,10 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from app.config import GROQ_API_KEY, REDIS_URL # Add REDIS_URL
 from app.prompts import RETRIEVER_SYSTEM_PROMPT, ANALYZER_SYSTEM_PROMPT, WRITER_SYSTEM_PROMPT
 results_store = {}
-# 1. Setup In-Memory Queues (Bypasses ISP/Firewall issues completely)
-queue_retriever = asyncio.Queue()
-queue_analyzer = asyncio.Queue()
-queue_writer = asyncio.Queue()
+
+QUEUE_RETRIEVER = "retriever_tasks"
+QUEUE_ANALYZER = "analyzer_tasks"
+QUEUE_WRITER = "writer_tasks"
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 groq_client = AsyncGroq(api_key=GROQ_API_KEY)
 
@@ -28,83 +28,119 @@ async def call_groq(system_prompt, user_prompt, json_mode=False, stream=False):
 async def retriever_worker():
     print("Retriever Worker active...")
     while True:
+        # Get task from Redis
         result = await redis_client.brpop("retriever_tasks", timeout=0)
         if result:
             _, task_json = result
             task = json.loads(task_json)
             task_id = task.get("task_id")
-            print(f"Analyzer: GOT TASK {task['task_id']}")
-
-            # --- STEP 1: UI UPDATE ---
-            print(f"[{task_id}] Updating UI...")
-            print(f"Retriever: PUSHING TO ANALYZER QUEUE {task_id}")
-            await queue_analyzer.put(task)
-            # await redis_client.rpush(f"results:{task_id}", "data: Retriever: Researching via Groq...")
-
-            # --- STEP 2: GROQ CALL ---
-            print(f"[{task_id}] Calling Groq...")
+            await redis_client.append(f"results:{task_id}", "\nRetriever: Starting research... ")
             try:
                 chat_completion = await groq_client.chat.completions.create(
-                    messages=[{"role": "user", "content": f"Research: {task.get('topic')}"}],
+                    messages=[{"role": "user", "content": f"Research the following topic: {task.get('topic_to_research')}"}],
                     model="llama-3.1-8b-instant",
                 )
-                research_result = chat_completion.choices[0].message.content
-                print(f"[{task_id}] Groq returned data successfully.")
+                task["research_data"] = chat_completion.choices[0].message.content
             except Exception as e:
-                print(f"❌ GROQ CRASH: {e}")
+                print(f"❌ RETRIEVER CRASH: {e}")
+                # Optional: Push back to retriever_tasks to retry
                 continue 
 
-            # --- STEP 3: PASS TO ANALYZER ---
-            print(f"[{task_id}] Pushing to analyzer_tasks...")
-            task["research_data"] = research_result
+            # --- HANDOFF ---
+            # Push ONLY to Redis. No more asyncio.Queue!
             await redis_client.lpush("analyzer_tasks", json.dumps(task))
-            
-            # --- STEP 4: FINAL UI UPDATE ---
-            await redis_client.rpush(f"results:{task_id}", "data: Retriever: Done. Handing off to Analyzer.")
-            print(f"[{task_id}] Retriever stage finished.")
+            await redis_client.append(f"results:{task_id}", "\n\n--- 🔍 RETRIEVER UPDATE ---\nResearch complete. Handing off to Analyzer for deeper insights.\n")
 async def analyzer_worker():
-    print("Analyzer Worker active (Batching)...")
+    print("Analyzer Worker active (Real Batching Mode)...")
     batch = []
+    MAX_BATCH_SIZE = 3
+    BATCH_TIMEOUT = 5.0  # Seconds
+
     while True:
-        task = await queue_analyzer.get()
-        print(f"Analyzer: GOT TASK {task['task_id']}")
-        batch.append(task)
-        if len(batch) >= 1: 
-            res = await call_groq(ANALYZER_SYSTEM_PROMPT, json.dumps(batch), json_mode=True)
-            results = json.loads(res.choices[0].message.content)
-            # Logic: Assign analysis to task and move to writer
-            task['analysis'] = results.get('analysis', 'Analysis complete.')
-            await queue_writer.put(task)
-            batch = []
-        queue_analyzer.task_done()
+        try:
+            # 1. Wait for at least ONE task to arrive (Blocking)
+            if not batch:
+                result = await redis_client.brpop("analyzer_tasks", timeout=BATCH_TIMEOUT)
+                if result:
+                    _, task_json = result
+                    batch.append(json.loads(task_json))
+            
+            # 2. Try to grab more tasks quickly if they exist (Non-blocking)
+            while len(batch) < MAX_BATCH_SIZE:
+                # LPOP is non-blocking. If the queue is empty, it returns None
+                extra_task_json = await redis_client.lpop("analyzer_tasks")
+                if extra_task_json:
+                    batch.append(json.loads(extra_task_json))
+                else:
+                    break # No more tasks in queue for now
+
+            # 3. If we have a batch (or the timeout hit), process them!
+            if batch:
+                print(f"Analyzer: Processing batch of {len(batch)} tasks...")
+                
+                # Manual Batching: We send the whole list to the LLM in one prompt
+                # This saves money and time!
+                res = await call_groq(
+                    ANALYZER_SYSTEM_PROMPT, 
+                    f"Analyze these research reports: {json.dumps(batch)}", 
+                    json_mode=True
+                )
+                
+                analysis_results = json.loads(res.choices[0].message.content)
+                
+                # 4. Distribute the results back to individual tasks and hand off
+                for task in batch:
+                    task_id = task['task_id']
+                    # Get the specific analysis for this task from the LLM JSON
+                    task['analysis'] = analysis_results.get(task_id, "Analysis complete.")
+                    
+                    # Handoff each task in the batch to the Writer
+                    await redis_client.lpush("writer_tasks", json.dumps(task))
+                    await redis_client.append(f"results:{task_id}", "\n\n--- ANALYZER UPDATE ---\nBatch analysis complete.\n")
+                # Clear the batch for the next round
+                batch = []
+
+        except Exception as e:
+            print(f"❌ ANALYZER ERROR: {e}")
+            batch = [] # Clear batch so we don't get stuck in a loop
 
 async def writer_worker():
-    print("Writer Worker active...")
+    print("Writer Worker active (Redis Mode)...")
     while True:
-        task = await queue_writer.get()
-        print(f"Writer: GOT TASK {task['task_id']}")
+        result = await redis_client.brpop("writer_tasks", timeout=0)
         
-        try:
-            # We call Groq with stream=True
-            stream = await call_groq(WRITER_SYSTEM_PROMPT, f"Prompt: {task['original_prompt']}\nAnalysis: {task['analysis']}", stream=True)
+        if result:
+            _, task_json = result
+            task = json.loads(task_json)
+            task_id = task.get("task_id")
+            print(f"Writer: RECEIVED TASK {task_id}")
             
-            print(f"Writer: Streaming response for {task['task_id']}")
-            async for chunk in stream:
-                content = chunk.choices[0].delta.content
-                if content:
-                    # This pushes to the results store (which your stream endpoint uses)
-                    # Use a dictionary or a queue to hold the result
-                    results_store[task['task_id']] = results_store.get(task['task_id'], "") + content
-                    print(content, end="", flush=True) # See it in Terminal 1
-            
-            print(f"\nTask {task['task_id']} complete.")
-            results_store[task['task_id']] += "\n[DONE]"
-            
-        except Exception as e:
-            print(f"CRITICAL ERROR in Writer: {e}")
-            
-        queue_writer.task_done()
+            try:
+                # 1. Update UI that we are starting
+                await redis_client.append(f"results:{task_id}", "\nWriter: Generating final report...\n\n")
 
+                # 2. Call Groq with streaming
+                stream = await call_groq(
+                    WRITER_SYSTEM_PROMPT, 
+                    f"Prompt: {task['original_prompt']}\nAnalysis: {task['analysis']}", 
+                    stream=True
+                )
+                
+                # 3. Stream chunks DIRECTLY into Redis
+                async for chunk in stream:
+                    content = chunk.choices[0].delta.content
+                    if content:
+                        # NO MORE results_store[task_id]
+                        # Use redis_client.append instead!
+                        await redis_client.append(f"results:{task_id}", content)
+                
+                # 4. Mark as finished in Redis
+                await redis_client.append(f"results:{task_id}", "\n\n[DONE]")
+                print(f"Writer: Task {task_id} COMPLETED.")
+                
+            except Exception as e:
+                print(f"CRITICAL ERROR in Writer: {e}")
+                await redis_client.append(f"results:{task_id}", f"\n[ERROR]: {str(e)}")
 async def main():
     await asyncio.gather(retriever_worker(), analyzer_worker(), writer_worker())
 
