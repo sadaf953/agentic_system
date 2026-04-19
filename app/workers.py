@@ -1,18 +1,16 @@
 import asyncio
 import json
-import redis.asyncio as redis # Add this
+import redis.asyncio as redis 
 from groq import AsyncGroq
 from tenacity import retry, stop_after_attempt, wait_exponential
-from app.config import GROQ_API_KEY, REDIS_URL # Add REDIS_URL
+from app.config import GROQ_API_KEY, REDIS_URL 
 from app.prompts import RETRIEVER_SYSTEM_PROMPT, ANALYZER_SYSTEM_PROMPT, WRITER_SYSTEM_PROMPT
-results_store = {}
 
 QUEUE_RETRIEVER = "retriever_tasks"
 QUEUE_ANALYZER = "analyzer_tasks"
 QUEUE_WRITER = "writer_tasks"
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 groq_client = AsyncGroq(api_key=GROQ_API_KEY)
-
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
@@ -28,7 +26,6 @@ async def call_groq(system_prompt, user_prompt, json_mode=False, stream=False):
 async def retriever_worker():
     print("Retriever Worker active...")
     while True:
-        # Get task from Redis
         result = await redis_client.brpop("retriever_tasks", timeout=0)
         if result:
             _, task_json = result
@@ -45,12 +42,8 @@ async def retriever_worker():
                 )
                 task["research_data"] = chat_completion.choices[0].message.content
             except Exception as e:
-                print(f"❌ RETRIEVER CRASH: {e}")
-                
+                print(f"❌ RETRIEVER CRASH: {e}")               
                 continue 
-
-           
-            # Push ONLY to Redis. No more asyncio.Queue!
             await redis_client.lpush("analyzer_tasks", json.dumps(task))
             await redis_client.append(f"results:{task_id}", "\n\n--- 🔍 RETRIEVER UPDATE ---\nResearch complete. Handing off to Analyzer for deeper insights.\n")
 async def analyzer_worker():
@@ -133,7 +126,6 @@ async def writer_worker():
                 async for chunk in stream:
                     content = chunk.choices[0].delta.content
                     if content:
-                        # NO MORE results_store[task_id]
                         # Use redis_client.append instead!
                         await redis_client.append(f"results:{task_id}", content)
                 
