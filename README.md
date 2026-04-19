@@ -85,6 +85,10 @@ curl -X POST http://localhost:8000/task \
      -d '{"prompt": "Research the cognitive benefits of audiobooks vs reading."}'
 ```
 
+### Utility Scripts
+- `test_redis.py`: A sanity check to verify the connection to the Upstash Redis instance.
+- `debug_redis.py`: A monitoring tool used during development to track real-time task counts in each agent queue.
+
 ### Final Step: View the Result
 Copy the `task_id` returned in Terminal 3 and open your browser to:
 `http://localhost:8000/stream/YOUR_TASK_ID`

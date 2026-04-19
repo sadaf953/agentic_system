@@ -15,6 +15,4 @@ Thumbs.db
 
 app/__pycache__/
 
-# Add any other test filenames here
-test_redis.py
-debug_redis.py
+
