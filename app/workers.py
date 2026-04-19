@@ -37,16 +37,19 @@ async def retriever_worker():
             await redis_client.append(f"results:{task_id}", "\nRetriever: Starting research... ")
             try:
                 chat_completion = await groq_client.chat.completions.create(
-                    messages=[{"role": "user", "content": f"Research the following topic: {task.get('topic_to_research')}"}],
+                    messages=[
+                        {"role": "system", "content": RETRIEVER_SYSTEM_PROMPT}, # Specialized Agent Role
+                        {"role": "user", "content": f"Topic to research: {task.get('topic_to_research')}"}
+                    ],
                     model="llama-3.1-8b-instant",
                 )
                 task["research_data"] = chat_completion.choices[0].message.content
             except Exception as e:
                 print(f"❌ RETRIEVER CRASH: {e}")
-                # Optional: Push back to retriever_tasks to retry
+                
                 continue 
 
-            # --- HANDOFF ---
+           
             # Push ONLY to Redis. No more asyncio.Queue!
             await redis_client.lpush("analyzer_tasks", json.dumps(task))
             await redis_client.append(f"results:{task_id}", "\n\n--- 🔍 RETRIEVER UPDATE ---\nResearch complete. Handing off to Analyzer for deeper insights.\n")

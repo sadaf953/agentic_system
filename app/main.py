@@ -31,8 +31,7 @@ groq_client = AsyncGroq(api_key=GROQ_API_KEY)
 async def root():
     return {"message": "Agentic AI System is Online!"}
 
-# Connection logic for Upstash Redis
-# Use this simplified version
+
 redis_client = redis.from_url(
     REDIS_URL, 
     decode_responses=True
@@ -41,39 +40,38 @@ class TaskRequest(BaseModel):
     prompt: str
 
 
-# ---------------------------------------------------------
-# ENDPOINT 1: THE ORCHESTRATOR (Receives task, starts pipeline)
-# ---------------------------------------------------------
-# main.py
-# --- main.py ---
-
 @app.post("/task")
 async def submit_task(request: TaskRequest):
     task_id = str(uuid.uuid4())
-    
-    response = await groq_client.chat.completions.create(
-        messages=[
-            {"role": "system", "content": ORCHESTRATOR_SYSTEM_PROMPT},
-            {"role": "user", "content": request.prompt}
-        ],
-        model="llama-3.1-8b-instant",
-        response_format={"type": "json_object"}
-    )
-    
-    orchestrator_data = json.loads(response.choices[0].message.content)
-    topic = orchestrator_data.get("topic_to_research", "General Research")
-    
-    task_payload = {
-        "task_id": task_id,
-        "original_prompt": request.prompt,
-        "topic_to_research": topic
-    }
-    
-    # Use APPEND instead of SET to initialize
-    await redis_client.append(f"results:{task_id}", "Orchestrator: Task started. ")
-    await redis_client.lpush("retriever_tasks", json.dumps(task_payload))
-    
-    return {"task_id": task_id}
+    try:
+        response = await groq_client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": ORCHESTRATOR_SYSTEM_PROMPT},
+                {"role": "user", "content": request.prompt}
+            ],
+            model="llama-3.1-8b-instant",
+            response_format={"type": "json_object"}
+        )
+        
+        orchestrator_data = json.loads(response.choices[0].message.content)
+        topic = orchestrator_data.get("topic_to_research", "General Research")
+        
+        task_payload = {
+            "task_id": task_id,
+            "original_prompt": request.prompt,
+            "topic_to_research": topic
+        }
+        
+        await redis_client.append(f"results:{task_id}", "Orchestrator: Task started. ")
+        await redis_client.lpush("retriever_tasks", json.dumps(task_payload))
+        
+        return {"task_id": task_id}
+    except Exception as e:
+        print(f"ORCHESTRATOR ERROR: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"The system failed to break down this task. Error: {str(e)}"
+        )
 
 @app.get("/stream/{task_id}")
 async def stream_results(task_id: str):
@@ -83,7 +81,6 @@ async def stream_results(task_id: str):
             content = await redis_client.get(f"results:{task_id}") or ""
             if len(content) > last_index:
                 new_text = content[last_index:]
-                # This is the standard format for SSE
                 yield new_text
                 last_index = len(content)
                 
