@@ -96,12 +96,13 @@ Copy the `task_id` returned in Terminal 3 and open your browser to:
 - `test_redis.py`: A sanity check to verify the connection to the Upstash Redis instance.
 - `debug_redis.py`: A monitoring tool used during development to track real-time task counts in each agent queue.
 
+#### Post-Mortem
+Detailed documentation on scaling issues, design decisions, and trade-offs can be found in `POST_MORTEM.md`.
+
+
 ### Maintenance: Clearing the System
 If you encounter Redis "WRONGTYPE" errors or want to clear stuck tasks from the queues, run this one-liner in your terminal:
 
 ```bash
 python -c "import asyncio; import redis.asyncio as redis; from app.config import REDIS_URL; r=redis.from_url(REDIS_URL); asyncio.run(r.flushdb()); print('✅ Redis database cleared successfully!')"
-
-
-## Post-Mortem
-Detailed documentation on scaling issues, design decisions, and trade-offs can be found in `POST_MORTEM.md`.
+```
