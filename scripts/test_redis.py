@@ -43,7 +43,7 @@ async def test_connections():
         except Exception as e:
             print(f"Groq Error: {e}")
 
-    print("--- 🏁 Tests Finished ---")
+    print("--- Tests Finished ---")
 
 if __name__ == "__main__":
     asyncio.run(test_connections())
